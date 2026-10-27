@@ -1,0 +1,157 @@
+{
+ "assumptions": [
+  {
+   "basis": "карточка этапа 1",
+   "id": "A1",
+   "text": "обязательное требование airtightness (airtightness) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A2",
+   "text": "приоритеты strength, accuracy выведены из текста пожеланий"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A3",
+   "text": "одна модель на партию"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A4",
+   "text": "единицы STL неизвестны: координаты приняты за миллиметры"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A5",
+   "text": "доли нависаний нет в отчёте STL этапа 1: поддержки по геометрии не включаются"
+  },
+  {
+   "basis": "решение этапа 2",
+   "id": "A6",
+   "text": "требование dimensional_tol_mm = 0.15 — допущение, а не подтверждённый факт"
+  },
+  {
+   "basis": "решение этапа 2",
+   "id": "A7",
+   "text": "ориентация «как загружено» и положение в центре рабочей области стола: нависаний в отчёте STL нет, поворот не подбирался"
+  }
+ ],
+ "card_ref": {
+  "job_id": "job-1",
+  "revision": 1
+ },
+ "contract": "stage2.parameter_set",
+ "iteration": 1,
+ "materials": {
+  "0": {
+   "alternatives": [
+    {
+     "id": "enduse_abs",
+     "why": "оценка 0.50"
+    },
+    {
+     "id": "enduse_pa6",
+     "why": "оценка 0.50"
+    }
+   ],
+   "checks": [],
+   "id": "generic_pla_175",
+   "source": "rule:MATERIAL-RANK",
+   "why": "требования задания не различают 29 материалов каталога: взят материал слайсера по умолчанию (PLA); оценка 0.50"
+  }
+ },
+ "models": [
+  {
+   "attachment_id": "att-1",
+   "extruder": 0,
+   "id": "m1",
+   "orientation_candidate": "o1",
+   "source": "assumption:A7",
+   "transform": {
+    "position": [
+     -9.5,
+     0.0,
+     10.0
+    ],
+    "rotation": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "scale": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "why": "модель стоит как в файле, в центре рабочей области стола режима 3D"
+  }
+ ],
+ "printer": "hte530v5.2.4",
+ "printing_mode": {
+  "source": "rule:MODE-DEFAULT-CLASSIC",
+  "value": "classic",
+  "why": "режим 3D (classic) по умолчанию: 5D не запрошен"
+ },
+ "quality": {
+  "quality_type": "normal",
+  "source": "default",
+  "why": "профиль принтера по умолчанию: Fine, слой 0.15 мм задан отдельно: пожелание по точности размеров: тоньше слой"
+ },
+ "settings": {
+  "adhesion_type": {
+   "source": "rule:ADHESION-CLASSIC-SKIRT",
+   "value": "skirt",
+   "why": "3D: юбка вокруг детали, как в типовом проекте Stereotech; кайма не нужна"
+  },
+  "infill_sparse_density": {
+   "source": "rule:PRIORITY-STRENGTH",
+   "unit": "%",
+   "value": 30.0,
+   "why": "главный приоритет — прочность: больше периметров и сплошных слоёв, плотнее заполнение, сопло на 5 °C горячее для спекания слоёв"
+  },
+  "layer_height": {
+   "source": "rule:TOL-SOFT-FINE-LAYER",
+   "unit": "mm",
+   "value": 0.15,
+   "why": "пожелание по точности размеров: тоньше слой"
+  },
+  "material_print_temperature": {
+   "scope": "extruder:0",
+   "source": "rule:PRIORITY-STRENGTH",
+   "unit": "°C",
+   "value": 205.0,
+   "why": "главный приоритет — прочность: больше периметров и сплошных слоёв, плотнее заполнение, сопло на 5 °C горячее для спекания слоёв"
+  },
+  "top_bottom_thickness": {
+   "source": "rule:PRIORITY-STRENGTH",
+   "unit": "mm",
+   "value": 1.1,
+   "why": "главный приоритет — прочность: больше периметров и сплошных слоёв, плотнее заполнение, сопло на 5 °C горячее для спекания слоёв"
+  },
+  "wall_thickness": {
+   "source": "rule:PRIORITY-STRENGTH",
+   "unit": "mm",
+   "value": 1.6,
+   "why": "главный приоритет — прочность: больше периметров и сплошных слоёв, плотнее заполнение, сопло на 5 °C горячее для спекания слоёв; периметров: 4"
+  }
+ },
+ "status": "proposed",
+ "unsatisfied": [],
+ "version": "0.2",
+ "warnings": [
+  "stl report: Self-intersections and intersections/nesting between shells are not checked."
+ ]
+}

@@ -1,0 +1,290 @@
+import json
+
+import httpx
+import pytest
+
+from src.backend.domain.errors import AppError
+from src.backend.domain.model_settings import ModelSettings
+from src.backend.infrastructure.model_settings import ModelSettingsFile
+from src.backend.infrastructure.qwen import QwenClient
+from src.backend.ports.operations import Reasoning
+
+pytestmark = pytest.mark.unit
+SETTINGS = ModelSettings("http://test/v1", "test-model", "key")
+
+
+def client(respond, settings: ModelSettings = SETTINGS) -> QwenClient:
+    return QwenClient(lambda: settings, transport=httpx.MockTransport(respond), retry_delay=0)
+
+
+@pytest.mark.parametrize("status,attempts", [(429, 3), (500, 3), (503, 3), (401, 1), (400, 1)])
+async def test_retry_budget(status, attempts):
+    calls = []
+
+    async def respond(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": "test"}, headers={"Retry-After": "0"})
+
+    qwen = client(respond)
+    with pytest.raises(AppError):
+        await qwen.complete([{"role": "user", "content": "test"}], [], agent="a", thinking=False)
+    assert len(calls) == attempts
+    await qwen.close()
+
+
+async def test_transport_timeout_retried_twice():
+    calls = []
+
+    async def respond(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("synthetic timeout")
+
+    qwen = client(respond)
+    with pytest.raises(AppError) as error:
+        await qwen.complete([], [], agent="a", thinking=False)
+    assert error.value.code == "model_unavailable"
+    assert len(calls) == 3
+    await qwen.close()
+
+
+async def test_reply_keeps_reasoning_usage_and_raw_provider_answer():
+    sent = {}
+    body = {
+        "id": "x",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": "{}", "reasoning_content": "думаю", "tool_calls": None},
+            }
+        ],
+        "usage": {"completion_tokens_details": {"reasoning_tokens": 5}},
+    }
+
+    async def respond(request):
+        sent["agent"] = request.headers["X-Mosprom-Agent"]
+        sent["payload"] = json.loads(request.content)
+        return httpx.Response(200, json=body)
+
+    qwen = client(respond)
+    reply = await qwen.complete([], [], agent="judge", thinking=True)
+    assert (reply.content, reply.reasoning, reply.finish_reason) == ("{}", "думаю", "stop")
+    assert reply.tool_calls == [] and reply.raw == body
+    assert sent["agent"] == "judge" and sent["payload"]["enable_thinking"] is True
+    assert "tools" not in sent["payload"]
+    await qwen.close()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        ModelSettings("http://test/v1", "m", ""),
+        ModelSettings("", "m", "key"),
+        ModelSettings("http://test/v1", "", "key"),
+    ],
+)
+async def test_unconfigured_model_fails_fast_without_a_request(settings):
+    calls = []
+
+    async def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    qwen = client(respond, settings)
+    with pytest.raises(AppError) as error:
+        await qwen.complete([], [], agent="a", thinking=False)
+    assert error.value.code == "model_not_configured" and not calls
+    assert error.value.message == "LLM модель не подключена, укажите адрес API, модель и ключ"
+    await qwen.close()
+
+
+async def test_a_save_in_the_chat_reaches_the_next_call(tmp_path):
+    """Клиент читает настройки каждый вызов."""
+    sent = []
+
+    async def respond(request):
+        model = json.loads(request.content)["model"]
+        sent.append((str(request.url), request.headers["Authorization"], model))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    saved = ModelSettingsFile(tmp_path, ModelSettings("http://env/v1", "env-model", ""))
+    qwen = QwenClient(saved.current, transport=httpx.MockTransport(respond))
+    with pytest.raises(AppError):
+        await qwen.complete([], [], agent="a", thinking=False)
+    saved.update("https://other.example/api/", "other-model", "secret")
+    await qwen.complete([], [], agent="a", thinking=False)
+    saved.update("http://third/v1", "third-model", None)
+    await qwen.complete([], [], agent="a", thinking=False)
+    assert sent == [
+        ("https://other.example/api/chat/completions", "Bearer secret", "other-model"),
+        ("http://third/v1/chat/completions", "Bearer secret", "third-model"),
+    ]
+    await qwen.close()
+
+
+def stream(*chunks: dict) -> bytes:
+    lines = [f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks]
+    return ("".join(lines) + "data: [DONE]\n\n").encode()
+
+
+async def test_stream_joins_reasoning_text_tool_calls_and_usage():
+    sent = {}
+    body = stream(
+        {"id": "s1", "model": "m", "choices": [{"delta": {"reasoning_content": "ду"}}]},
+        {"choices": [{"delta": {"reasoning_content": "маю", "content": '{"a"'}}]},
+        {"choices": [{"delta": {"content": ": 1}"}}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "id": "t1", "function": {"name": "convert_units"}}
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"v":'}}]},
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "1}"}}]},
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+        {"choices": [], "usage": {"total_tokens": 7}},
+    )
+
+    async def respond(request):
+        sent["payload"] = json.loads(request.content)
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    qwen = client(respond)
+    reply = await qwen.complete([], [], agent="a", thinking=True, budget=900)
+    assert (reply.content, reply.reasoning, reply.finish_reason) == (
+        '{"a": 1}',
+        "думаю",
+        "tool_calls",
+    )
+    assert reply.tool_calls == [
+        {
+            "id": "t1",
+            "type": "function",
+            "function": {"name": "convert_units", "arguments": '{"v":1}'},
+        }
+    ]
+    assert reply.usage == {"total_tokens": 7} and reply.raw["usage"] == {"total_tokens": 7}
+    assert reply.raw["choices"][0]["message"]["content"] == '{"a": 1}'
+    assert sent["payload"]["stream"] is True and sent["payload"]["thinking_budget"] == 900
+    await qwen.close()
+
+
+async def test_stream_cut_before_finish_is_retried():
+    calls = []
+    partial = stream({"choices": [{"delta": {"content": "{"}}]})
+
+    async def respond(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(
+                200, content=partial, headers={"content-type": "text/event-stream"}
+            )
+        return httpx.Response(
+            200,
+            content=stream({"choices": [{"delta": {"content": "{}"}, "finish_reason": "stop"}]}),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    qwen = client(respond)
+    reply = await qwen.complete([], [], agent="a", thinking=False)
+    assert reply.content == "{}" and len(calls) == 2
+    await qwen.close()
+
+
+async def test_budget_is_sent_only_with_thinking():
+    sent = {}
+
+    async def respond(request):
+        sent["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    qwen = client(respond)
+    await qwen.complete([], [], agent="a", thinking=False, budget=900)
+    assert "thinking_budget" not in sent["payload"]
+    await qwen.close()
+
+
+def listener() -> tuple[list[tuple[str, int]], Reasoning]:
+    seen: list[tuple[str, int]] = []
+
+    async def think(text: str, attempt: int) -> None:
+        seen.append((text, attempt))
+
+    return seen, think
+
+
+async def test_streamed_reasoning_reaches_the_caller_piece_by_piece():
+    seen, think = listener()
+    body = stream(
+        {"choices": [{"delta": {"reasoning_content": "ду"}}]},
+        {"choices": [{"delta": {"content": "{"}}]},
+        {"choices": [{"delta": {"reasoning_content": "маю", "content": "}"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    )
+
+    async def respond(request):
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    qwen = client(respond)
+    reply = await qwen.complete([], [], agent="a", thinking=True, on_reasoning=think)
+    assert seen == [("ду", 1), ("маю", 1)] and reply.reasoning == "думаю"
+    await qwen.close()
+
+
+async def test_a_retry_streams_its_reasoning_as_the_next_attempt():
+    seen, think = listener()
+    bodies = [
+        stream({"choices": [{"delta": {"reasoning_content": "оборвалось"}}]}),
+        stream(
+            {"choices": [{"delta": {"reasoning_content": "заново", "content": "{}"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ),
+    ]
+
+    async def respond(request):
+        return httpx.Response(
+            200, content=bodies.pop(0), headers={"content-type": "text/event-stream"}
+        )
+
+    qwen = client(respond)
+    reply = await qwen.complete([], [], agent="a", thinking=True, on_reasoning=think)
+    assert seen == [("оборвалось", 1), ("заново", 2)] and reply.reasoning == "заново"
+    await qwen.close()
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ({"content": "{}", "reasoning_content": "думаю целиком"}, [("думаю целиком", 1)]),
+        ({"content": "{}"}, []),
+    ],
+)
+async def test_a_single_body_hands_over_the_whole_reasoning_once(message, expected):
+    seen, think = listener()
+
+    async def respond(request):
+        return httpx.Response(
+            200, json={"choices": [{"finish_reason": "stop", "message": message}]}
+        )
+
+    qwen = client(respond)
+    await qwen.complete([], [], agent="a", thinking=True, on_reasoning=think)
+    assert seen == expected
+    await qwen.close()

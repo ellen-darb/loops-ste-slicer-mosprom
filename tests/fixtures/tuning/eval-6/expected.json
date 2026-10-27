@@ -1,0 +1,261 @@
+{
+ "assumptions": [
+  {
+   "basis": "карточка этапа 1",
+   "id": "A1",
+   "text": "требование «Рабочий диапазон температур» понято как service_temp_max_c = 70"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A2",
+   "text": "требование «Максимальная плотность материала» понято как density_max_g_cm3 = 1.25"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A3",
+   "text": "требование «Среда эксплуатации» понято как chemical_resistance = oil, ozone"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A4",
+   "text": "нагрузка «impact» выведена из требования «Безопасность при разрушении»"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A5",
+   "text": "обязательное требование part_name (Наименование детали) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A6",
+   "text": "обязательное требование rotation_speed_nominal (Скорость вращения) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A7",
+   "text": "обязательное требование tip_speed (Окружная скорость на концах лопастей) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A8",
+   "text": "обязательное требование heat_resistance_no_softening (Теплостойкость без размягчения) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A9",
+   "text": "обязательное требование hub_clip_fatigue (Работа цанговой клипсы ступицы) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A10",
+   "text": "обязательное требование impact_resistance_no_fragments (Безопасность при разрушении) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A11",
+   "text": "обязательное требование fit_on_shaft (Посадка на вал) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A12",
+   "text": "обязательное требование stl_units (Единицы модели STL) не учтено подбором параметров"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A13",
+   "text": "тип детали «impeller_fan» выведен из назначения в карточке"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A14",
+   "text": "Расход воздуха и давление не нормируются, форма лопастей воспроизводится по модели STL без аэродинамической доводки"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A15",
+   "text": "Состав масляного тумана принимается как в ТЗ, эмульсия СОЖ без агрессивных промывок растворителем"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A16",
+   "text": "координаты модели в миллиметрах (подтверждено этапом 1)"
+  },
+  {
+   "basis": "карточка этапа 1",
+   "id": "A17",
+   "text": "доли нависаний нет в отчёте STL этапа 1: поддержки по геометрии не включаются"
+  },
+  {
+   "basis": "решение этапа 2",
+   "id": "A18",
+   "text": "требование part_class = impeller_fan — допущение, а не подтверждённый факт"
+  },
+  {
+   "basis": "решение этапа 2",
+   "id": "A19",
+   "text": "обязательное требование environment_medium материал выполняет лишь частично: catalog description covers only: oil"
+  },
+  {
+   "basis": "решение этапа 2",
+   "id": "A20",
+   "text": "ориентация «как загружено» и положение в центре рабочей области стола: нависаний в отчёте STL нет, поворот не подбирался"
+  }
+ ],
+ "card_ref": {
+  "job_id": "a9c4998f-3113-4019-8253-46e9a2660c04",
+  "revision": 2
+ },
+ "contract": "stage2.parameter_set",
+ "iteration": 1,
+ "materials": {
+  "0": {
+   "alternatives": [
+    {
+     "id": "enduse_tpu_d70",
+     "why": "оценка 0.80; частично: environment_medium (catalog description covers only: oil)"
+    },
+    {
+     "id": "fiberpart_tpu_c5",
+     "why": "оценка 0.80; частично: environment_medium (catalog description covers only: oil)"
+    }
+   ],
+   "checks": [
+    {
+     "detail": "service_max_c=100",
+     "hard": true,
+     "key": "service_temp_max_c",
+     "requirement_id": "temperature_range",
+     "status": "ok"
+    },
+    {
+     "detail": "density=1.05 g/cm3 (catalog)",
+     "hard": true,
+     "key": "density_max_g_cm3",
+     "requirement_id": "density_max",
+     "status": "ok"
+    },
+    {
+     "detail": "catalog description covers only: oil",
+     "hard": true,
+     "key": "chemical_resistance",
+     "requirement_id": "environment_medium",
+     "status": "warn"
+    }
+   ],
+   "id": "enduse_pa6",
+   "source": "rule:MATERIAL-RANK",
+   "why": "лучший из 29 материалов каталога по требованиям задания; оценка 0.80; частично: environment_medium (catalog description covers only: oil)"
+  }
+ },
+ "models": [
+  {
+   "attachment_id": "bb1864b3-7dd3-47a1-a275-8e1f23ae7a9b",
+   "extruder": 0,
+   "id": "m1",
+   "orientation_candidate": "o1",
+   "source": "assumption:A20",
+   "transform": {
+    "position": [
+     -9.5,
+     0.0,
+     84.5
+    ],
+    "rotation": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "scale": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "why": "модель стоит как в файле, в центре рабочей области стола режима 3D"
+  }
+ ],
+ "printer": "hte530v5.2.4",
+ "printing_mode": {
+  "source": "rule:MODE-DEFAULT-CLASSIC",
+  "value": "classic",
+  "why": "режим 3D (classic) по умолчанию: 5D не запрошен"
+ },
+ "quality": {
+  "quality_type": "normal",
+  "source": "default",
+  "why": "профиль принтера по умолчанию: Fine, слой 0.2 мм задан отдельно: обычный слой 0,2 мм, как в типовых проектах Stereotech"
+ },
+ "settings": {
+  "cool_fan_enabled_classic": {
+   "scope": "extruder:0",
+   "source": "rule:FAN-OFF-NO-COOLING",
+   "value": false,
+   "why": "в файле материала обдув 0 %: обдув выключен"
+  },
+  "infill_pattern": {
+   "source": "rule:INFILL-GYROID",
+   "value": "gyroid",
+   "why": "ударная или циклическая нагрузка либо гибкая деталь: изотропное заполнение gyroid"
+  },
+  "infill_sparse_density": {
+   "source": "rule:LOAD-INFILL-MIN",
+   "unit": "%",
+   "value": 30.0,
+   "why": "циклическая или ударная нагрузка: заполнение от 30 %, чтобы сердцевина держала стенки"
+  },
+  "layer_height": {
+   "source": "rule:LAYER-STANDARD",
+   "unit": "mm",
+   "value": 0.2,
+   "why": "обычный слой 0,2 мм, как в типовых проектах Stereotech"
+  },
+  "speed_print": {
+   "source": "rule:SPEED-MATERIAL-MAX",
+   "unit": "mm/s",
+   "value": 50.0,
+   "why": "скорость печати не выше рекомендованной в файле материала"
+  },
+  "top_bottom_thickness": {
+   "source": "rule:LOAD-WALLS",
+   "unit": "mm",
+   "value": 0.9,
+   "why": "циклическая или ударная нагрузка: периметры несут нагрузку лучше заполнения"
+  },
+  "wall_thickness": {
+   "source": "rule:LOAD-WALLS",
+   "unit": "mm",
+   "value": 1.6,
+   "why": "циклическая или ударная нагрузка: периметры несут нагрузку лучше заполнения; периметров: 4"
+  }
+ },
+ "status": "proposed",
+ "unsatisfied": [],
+ "version": "0.2",
+ "warnings": [
+  "requirement noise_low (Аэродинамический шум) is not used by parameter selection",
+  "requirement balance_low_inertia (Баланс и момент инерции) is not used by parameter selection",
+  "stage 1 unknown: Требуемые допуски и посадочные размеры отверстия под вал и цанговой клипсы",
+  "stage 1 unknown: Материал или его марка, указанная или запрещённая заказчиком",
+  "stage 1 unknown: Количество деталей и требуемые сроки",
+  "stage 1 unknown: Направление вращения и рабочая сторона лопастей",
+  "stage 1 unknown: Требуется ли балансировка готовой детали и допустимая остаточная дисбалансная нагрузка",
+  "stage 1 unknown: Наличие и величина крутящего момента, передаваемого через ступицу",
+  "stage 1 unknown: Допустимость постобработки, влияющей на теплостойкость и герметичность",
+  "stl report: Self-intersections and intersections/nesting between shells are not checked.",
+  "stl report: STL does not encode authoritative units; the supplied unit is an explicit caller assumption.",
+  "stl report: Geometry does not establish material, load capacity, tolerances, manufacturing accuracy or printability.",
+  "stl report: Multiple connected shells: separate parts, nested cavities or overlaps require further analysis; combined physical volume withheld."
+ ]
+}

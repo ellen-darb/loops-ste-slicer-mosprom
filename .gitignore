@@ -1,0 +1,39 @@
+__pycache__/
+.DS_Store
+.idea/
+*.png
+!tests/fixtures/*.png
+.venv/
+.pytest_cache/
+.coverage
+.coverage.*
+artifacts/
+.env
+.env.*
+!.env.example
+node_modules/
+src/web/dist/
+playwright-report/
+test-results/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+*.egg-info/
+
+# материалы кейса
+/.scratch/
+*.zip
+
+# результаты нарезки
+*.gcode
+*.3mf
+!/results/**
+
+# сборка архива
+build/
+dist/
+
+# результаты семи деталей
+!results/organizer-examples/**/*.png
+!results/organizer-examples/**/*.3mf
+!results/organizer-examples/**/*.zip

@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.pdf binary
+# Extracted reference excerpts retain whitespace from the organizer's documents.
+tests/eval/examples/example-*.md -whitespace
+results/organizer-examples/**/*.zip binary
+results/organizer-examples/**/*.3mf binary
+results/organizer-examples/**/*.png binary

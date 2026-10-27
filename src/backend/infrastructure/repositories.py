@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+import builtins
+from typing import Any
+
+from sqlalchemy import and_, delete, false, func, or_, select
+from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..domain.errors import AppError, NotFound
+from ..domain.models import (
+    AgentCall,
+    Attachment,
+    Event,
+    Job,
+    JobHead,
+    Knowledge,
+    Message,
+    QueuedMessage,
+)
+from ..domain.pipeline import Step
+from . import tables as t
+
+
+class Repository:
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+
+class JobRepository(Repository):
+    async def head(self, job_id: str) -> JobHead:
+        row = (
+            (
+                await self._session.execute(
+                    select(
+                        t.jobs.c.id,
+                        t.jobs.c.payload["revision"].as_integer().label("revision"),
+                        t.jobs.c.payload["status"].as_string().label("status"),
+                    ).where(t.jobs.c.id == job_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            raise NotFound()
+        return JobHead.model_validate(dict(row))
+
+    async def get(self, job_id: str, *, user_id: str | None = None, lock: bool = False) -> Job:
+        """Возвращает задачу по идентификатору."""
+        query = select(t.jobs.c.payload).where(t.jobs.c.id == job_id)
+        if user_id is not None:
+            query = query.where(t.jobs.c.user_id == user_id)
+        value = await self._session.scalar(query)
+        if value is None:
+            raise NotFound()
+        job = Job.model_validate(value)
+        # удалённый чат скрыт
+        if user_id is not None and job.deleted:
+            raise NotFound()
+        return job
+
+    async def save(self, job: Job) -> None:
+        payload = job.model_dump(mode="json")
+        query = insert(t.jobs).values(id=job.id, user_id=job.user_id, payload=payload)
+        await self._session.execute(
+            query.on_conflict_do_update(
+                index_elements=["id"], set_={"payload": query.excluded.payload}
+            )
+        )
+
+    async def list(
+        self, user_id: str, before: str | None = None, limit: int = 50
+    ) -> builtins.list[Job]:
+        updated = t.jobs.c.payload["updated_at"].as_string()
+        query = (
+            select(t.jobs.c.payload)
+            .where(
+                t.jobs.c.user_id == user_id,
+                ~func.coalesce(t.jobs.c.payload["deleted"].as_boolean(), false()),
+            )
+            .order_by(updated.desc(), t.jobs.c.id.desc())
+            .limit(limit)
+        )
+        if before:
+            cursor = select(updated).where(t.jobs.c.id == before).scalar_subquery()
+            query = query.where(
+                or_(updated < cursor, and_(updated == cursor, t.jobs.c.id < before))
+            )
+        # карточки не нужны
+        return [
+            Job.model_validate({k: v for k, v in value.items() if k != "card"})
+            for value in await self._session.scalars(query)
+        ]
+
+
+class MessageRepository(Repository):
+    async def add(self, message: Message) -> int:
+        """Место сообщения в чате."""
+        return (
+            await self._session.execute(
+                insert(t.messages)
+                .values(job_id=message.job_id, payload=message.model_dump(mode="json"))
+                .returning(t.messages.c.seq)
+            )
+        ).scalar_one()
+
+    async def list(
+        self, job_id: str, before: int | None = None, limit: int = 100
+    ) -> builtins.list[dict[str, Any]]:
+        query = (
+            select(t.messages)
+            .where(t.messages.c.job_id == job_id)
+            .order_by(t.messages.c.seq.desc())
+            .limit(limit)
+        )
+        if before is not None:
+            query = query.where(t.messages.c.seq < before)
+        rows = (await self._session.execute(query)).mappings()
+        return list(reversed([dict(row["payload"], seq=row["seq"]) for row in rows]))
+
+
+class QueuedRepository(Repository):
+    """Сообщения очереди в порядке отправки."""
+
+    async def save(self, item: QueuedMessage) -> None:
+        query = insert(t.queued_messages).values(
+            id=item.id, job_id=item.job_id, payload=item.model_dump(mode="json")
+        )
+        await self._session.execute(
+            query.on_conflict_do_update(
+                index_elements=["id"], set_={"payload": query.excluded.payload}
+            )
+        )
+
+    async def list(self, job_id: str) -> builtins.list[QueuedMessage]:
+        rows = await self._session.scalars(
+            select(t.queued_messages.c.payload)
+            .where(t.queued_messages.c.job_id == job_id)
+            .order_by(t.queued_messages.c.seq)
+        )
+        return [QueuedMessage.model_validate(row) for row in rows]
+
+    async def remove(self, ids: builtins.list[str]) -> None:
+        await self._session.execute(
+            delete(t.queued_messages).where(t.queued_messages.c.id.in_(ids))
+        )
+
+
+class AttachmentRepository(Repository):
+    async def save(self, attachment: Attachment) -> None:
+        query = insert(t.attachments).values(
+            id=attachment.id, job_id=attachment.job_id, payload=attachment.model_dump(mode="json")
+        )
+        await self._session.execute(
+            query.on_conflict_do_update(
+                index_elements=["id"], set_={"payload": query.excluded.payload}
+            )
+        )
+
+    async def list(self, job_id: str) -> builtins.list[Attachment]:
+        rows = await self._session.scalars(
+            select(t.attachments.c.payload)
+            .where(t.attachments.c.job_id == job_id)
+            .order_by(t.attachments.c.id)
+        )
+        return [Attachment.model_validate(row) for row in rows]
+
+
+class ReceiptRepository(Repository):
+    async def find(self, key: str, payload_hash: str) -> dict[str, Any] | None:
+        # блокировка записи сразу
+        row = (
+            (await self._session.execute(select(t.receipts).where(t.receipts.c.key == key)))
+            .mappings()
+            .first()
+        )
+        if row is None:
+            return None
+        if row["hash"] != payload_hash:
+            raise AppError(
+                "Повторный request_id содержит другую команду", "idempotency_conflict", 409
+            )
+        return row["result"]
+
+    async def remember(self, key: str, payload_hash: str, result: dict[str, Any]) -> None:
+        await self._session.execute(
+            insert(t.receipts).values(key=key, hash=payload_hash, result=result)
+        )
+
+
+class CacheRepository(Repository):
+    async def get(self, key: str) -> dict[str, Any] | None:
+        return await self._session.scalar(select(t.cache.c.payload).where(t.cache.c.key == key))
+
+    async def put(self, key: str, value: dict[str, Any]) -> None:
+        await self._session.execute(
+            insert(t.cache).values(key=key, payload=value).on_conflict_do_nothing()
+        )
+
+
+class EventRepository(Repository):
+    async def append(self, event: Event) -> None:
+        # порядок коммита
+        await self._session.execute(
+            insert(t.events).values(job_id=event.job_id, payload=event.model_dump(mode="json"))
+        )
+        # будим после коммита
+        self._session.info["notify"].add(event.job_id)
+
+    async def list(self, job_id: str, after: int = 0, limit: int = 100) -> builtins.list[Event]:
+        query = (
+            select(t.events)
+            .where(t.events.c.job_id == job_id, t.events.c.seq > after)
+            .order_by(t.events.c.seq)
+            .limit(limit)
+        )
+        rows = (await self._session.execute(query)).mappings()
+        return [Event.model_validate(dict(row["payload"], event_id=row["seq"])) for row in rows]
+
+    async def start(self, job_id: str, revision: int) -> int:
+        """Курсор перед первым событием ревизии."""
+        first = await self._session.scalar(
+            select(func.min(t.events.c.seq)).where(
+                t.events.c.job_id == job_id,
+                t.events.c.payload["revision"].as_integer() >= revision,
+            )
+        )
+        if first is not None:
+            return first - 1
+        latest = await self._session.scalar(
+            select(func.max(t.events.c.seq)).where(t.events.c.job_id == job_id)
+        )
+        return latest or 0
+
+
+class KnowledgeRepository(Repository):
+    async def put(self, record: Knowledge) -> None:
+        query = insert(t.knowledge).values(
+            id=record.id,
+            material_id=record.material_id,
+            property=record.property,
+            aliases=[a.casefold() for a in record.aliases],
+            payload=record.model_dump(mode="json"),
+        )
+        await self._session.execute(
+            query.on_conflict_do_update(
+                index_elements=["id"],
+                set_={
+                    c: query.excluded[c] for c in ["material_id", "property", "aliases", "payload"]
+                },
+            )
+        )
+
+    async def all(self) -> builtins.list[Knowledge]:
+        statement = select(t.knowledge.c.payload).order_by(t.knowledge.c.id)
+        return [Knowledge.model_validate(v) for v in await self._session.scalars(statement)]
+
+
+class TraceRepository(Repository):
+    async def record(self, call: AgentCall) -> None:
+        await self._session.execute(insert(t.agent_calls).values(**call.model_dump()))
+
+    async def calls(self, job_id: str, revision: int) -> builtins.list[AgentCall]:
+        """Вызовы одной ревизии по порядку."""
+        rows = await self._session.execute(
+            select(t.agent_calls)
+            .where(t.agent_calls.c.job_id == job_id, t.agent_calls.c.revision == revision)
+            .order_by(t.agent_calls.c.id)
+        )
+        return [
+            AgentCall.model_validate({k: v for k, v in row.items() if k != "id"})
+            for row in rows.mappings()
+        ]
+
+    async def usage(self, job_id: str) -> tuple[int, int]:
+        """Вызовы модели и израсходованные токены."""
+        tokens = t.agent_calls.c.response["usage"]["total_tokens"].as_integer()
+        row = (
+            await self._session.execute(
+                select(func.count(), func.coalesce(func.sum(tokens), 0)).where(
+                    t.agent_calls.c.job_id == job_id, ~t.agent_calls.c.cached
+                )
+            )
+        ).one()
+        return row[0], row[1]
+
+
+class StageResultRepository(Repository):
+    """Результаты шагов по ревизиям."""
+
+    async def add(self, job_id: str, revision: int, step: Step, payload: dict[str, Any]) -> None:
+        # повторная доставка идемпотентна
+        await self._session.execute(
+            insert(t.stage_results)
+            .values(
+                job_id=job_id,
+                revision=revision,
+                stage=step.stage,
+                iteration=step.iteration,
+                payload=payload,
+            )
+            .on_conflict_do_nothing()
+        )
+
+    async def get(self, job_id: str, revision: int, step: Step) -> dict[str, Any] | None:
+        return await self._session.scalar(
+            select(t.stage_results.c.payload).where(
+                t.stage_results.c.job_id == job_id,
+                t.stage_results.c.revision == revision,
+                t.stage_results.c.stage == step.stage,
+                t.stage_results.c.iteration == step.iteration,
+            )
+        )
+
+    async def latest(self, job_id: str, revision: int, stage: str) -> dict[str, Any] | None:
+        """Последний проход шага ревизии."""
+        return await self._session.scalar(
+            select(t.stage_results.c.payload)
+            .where(
+                t.stage_results.c.job_id == job_id,
+                t.stage_results.c.revision == revision,
+                t.stage_results.c.stage == stage,
+            )
+            .order_by(t.stage_results.c.iteration.desc())
+            .limit(1)
+        )

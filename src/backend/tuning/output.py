@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
+from ..domain.parameters import Alternative as AlternativeModel
+from ..domain.parameters import (
+    AppliedConstraint,
+    CardRef,
+    Material,
+    MaterialCheck,
+    ParameterSet,
+    PlacedModel,
+    PrintingMode,
+    Quality,
+    SelectionAssumption,
+    Setting,
+    Transform,
+    Unsatisfied,
+)
+from .material_choice import MaterialChoice
+from .mode import ModeChoice
+from .notes import ConstraintResult, SettingChoice, Unmet
+from .placement import Placement
+from .quality import QualityChoice
+
+STAGE1_BASIS = "карточка этапа 1"
+STAGE2_BASIS = "решение этапа 2"
+# поворот и масштаб
+_UNSCALED = [1.0, 1.0, 1.0]
+
+
+@dataclass(frozen=True)
+class Selection:
+    """Все решения для карточки."""
+
+    job_id: str
+    revision: int
+    iteration: int
+    printer: str
+    mode: ModeChoice
+    quality: QualityChoice
+    material: MaterialChoice
+    settings: Mapping[str, SettingChoice]
+    placement: Placement
+    # допущения карточки, решений
+    card_assumptions: Sequence[str]
+    assumptions: Sequence[str]
+    unmet: Sequence[Unmet]
+    warnings: Sequence[str]
+    # только второй проход
+    constraint_results: Sequence[ConstraintResult] | None
+    infeasible: bool
+
+
+def render(selection: Selection) -> ParameterSet:
+    assumptions, ids = _numbered(selection.card_assumptions, selection.assumptions)
+    mode, quality, placement = selection.mode, selection.quality, selection.placement
+    results = selection.constraint_results
+    return ParameterSet(
+        card_ref=CardRef(job_id=selection.job_id, revision=selection.revision),
+        iteration=selection.iteration,
+        printer=selection.printer,
+        printing_mode=PrintingMode.model_validate(
+            {"value": mode.value, "why": mode.why, "source": mode.source}
+        ),
+        quality=Quality(quality_type=quality.profile.name, why=quality.why, source=quality.source),
+        materials={"0": _material(selection.material)},
+        settings={key: _setting(setting) for key, setting in selection.settings.items()},
+        models=[
+            PlacedModel(
+                id="m1",
+                attachment_id=placement.attachment_id,
+                extruder=0,
+                orientation_candidate=placement.candidate,
+                transform=Transform(
+                    rotation=[list(row) for row in placement.rotation],
+                    position=list(placement.position),
+                    scale=_UNSCALED,
+                ),
+                why=placement.why,
+                source=f"assumption:{ids[placement.orientation_assumption]}",
+            )
+        ],
+        assumptions=assumptions,
+        status="infeasible" if selection.infeasible else "proposed",
+        unsatisfied=[
+            Unsatisfied(
+                requirement_id=unmet.requirement_id,
+                why=unmet.why,
+                conflicts_with=unmet.conflicts_with,
+            )
+            for unmet in selection.unmet
+        ],
+        warnings=list(selection.warnings),
+        applied_constraints=None
+        if results is None
+        else [AppliedConstraint(id=item.id, result=item.result, why=item.why) for item in results],
+    )
+
+
+def _numbered(
+    from_card: Sequence[str], from_selection: Sequence[str]
+) -> tuple[list[SelectionAssumption], dict[str, str]]:
+    """Нумерует допущения и их тексты."""
+    entries: list[SelectionAssumption] = []
+    ids: dict[str, str] = {}
+    for texts, basis in ((from_card, STAGE1_BASIS), (from_selection, STAGE2_BASIS)):
+        for text in texts:
+            if text in ids:
+                continue
+            ids[text] = f"A{len(entries) + 1}"
+            entries.append(SelectionAssumption(id=ids[text], text=text, basis=basis))
+    return entries, ids
+
+
+def _material(choice: MaterialChoice) -> Material:
+    return Material(
+        id=choice.material.id,
+        why=choice.why,
+        source=choice.source,
+        alternatives=[
+            AlternativeModel(id=other.id, why=other.why) for other in choice.alternatives
+        ],
+        checks=[
+            MaterialCheck(
+                requirement_id=check.requirement_id,
+                key=check.key,
+                hard=check.hard,
+                status=check.status,
+                detail=check.detail,
+            )
+            for check in choice.checks
+        ],
+    )
+
+
+def _setting(setting: SettingChoice) -> Setting:
+    return Setting(
+        value=setting.value,
+        why=setting.why,
+        source=setting.source,
+        unit=setting.unit,
+        scope=setting.scope,
+    )
